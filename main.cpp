@@ -1,30 +1,33 @@
-//#include <QtCore/QCoreApplication>
+/*
+* 转换ISP输入\输出的RGB\YUV数据文件为bmp图像文件，以验证图像是否正确！
+* by 李宁 ramon.li@siengine.com 2020-08-03
+*
+*/
+
 #include <stdio.h>
-//#include <tchar.h>
 #include <stdint.h>
 #include <vector>
-//#include <windows.h>
 #include <algorithm>
 #include <memory>
-//#include <direct.h>
 #include <unistd.h>
 #include <string.h>
 
-uint32_t width = 180;
+uint32_t width  = 180;
 uint32_t height = 180;
 const uint16_t depth = 24;
 
-uint8_t ARMOUT = 0;
-uint8_t ARMIN  = 0;
+uint8_t arm_out = 0;
+uint8_t arm_in  = 0;
 
-uint8_t TEST_ONE  = 0;
-uint8_t TEST_TWO = 0;
+uint8_t  custom_c    = 0;
+uint8_t  linef_b     = 0;
+uint32_t line_offset = 0;
 
-#define FILE_TEST 0
+uint8_t per_color_bytes = 2;
+uint8_t pix_bits        = 14;
+//uint8_t color_format    = 0; //CIF 0:RAW 1:RGB 2:YUV
+
 #define RAW2B 1
-#define LTOUTFIRST 0
-//#define TEST_ONE 0
-//#define MAX_PATH 180
 
 #define BI_RGB       0         //不压缩（最常用）
 #define BI_RLE8      1         //8比特游程编码（BLE），只用于8位位图
@@ -35,11 +38,13 @@ uint8_t TEST_TWO = 0;
 #define RED          "\033[0;32;31m"
 
 
-char file_name[256] =  "image180180_armout.bmp";
+char file_name[256]  =  "image180180_armout.bmp";
+char file_name1[256]  =  "image180180_armout1.bmp";
+char file_name2[256]  =  "image180180_armout2.bmp";
 char fbmpR_name[256] = "output0_buffer.hex";
 char fbmpG_name[256] = "output1_buffer.hex";
 char fbmpB_name[256] = "output2_buffer.hex";
-char bmp_prefix[] = ".bmp";	
+//char bmp_suffix[]    = ".bmp";	
 
 #pragma pack(2) // 让编译器做2字节对齐 
 typedef struct tagBITMAPFILEHEADER
@@ -110,12 +115,8 @@ void createBMP(uint8_t* bitmapBits, uint32_t width, uint32_t height, uint16_t de
 
 void writeData2Bmp(uint8_t* bitmapBits, uint16_t data_len, FILE* hFile)
 {
-	//int ret = 0;
-	//printf(".writeData2Bmp0..................!\n");
 	fseek(hFile, 0L, /*SEEK_END*/2);//put file point to the file end.
-	//printf(".writeData2Bmp1..................!\n");
 	fwrite(bitmapBits, 1, data_len, hFile);
-	//printf(".writeData2Bmp2..................!\n");
 }
 
 int createBmp_with_fileheader(uint32_t width, uint32_t height, uint16_t depth, const char* fileName)
@@ -145,9 +146,6 @@ int createBmp_with_fileheader(uint32_t width, uint32_t height, uint16_t depth, c
         bmpInfoHeader.biPlanes = 1;
         bmpInfoHeader.biSizeImage = pixelDataSize;
 
-        //WCHAR wfile[64];
-        //swprintf(wfile, L"%S", fileName);
-
         FILE* hFile = fopen(fileName, "wb");
         if (!hFile)
 		{
@@ -171,7 +169,7 @@ unsigned int matoi(char* str, int count)
     unsigned int tmp = 0;
     int num = count;
     int i=0;
-    //printf("num = %d\n",num);
+
     for(i=0; i< num; i++)
     {
         if(str[i]<=0x39)
@@ -209,7 +207,7 @@ unsigned int matoi(char* str, int count)
             }
         }
     }
-    //printf("ungigend int size = %d\n",sizeof(unsigned int));
+
     return tmp;
 }
 
@@ -220,42 +218,46 @@ static void usage(char* name)
     printf("SYNOPSIS\n");
     printf("\t%s -i [-f path] \n\n", name);
     printf("DESCRIPTION\n");
-    //printf("\t\t f1, f2, f3   hex file\n");
-    //printf("\t\t output-file  binary file\n");
-	printf("\t\t -i    Convert arm in files!\n");
-	printf("\t\t -o    Convert arm out files!\n");
-	printf("\t\t -c    Convert isp out files not filter offset bytes!\n");
-	printf("\t\t -k    Convert isp out files filter offset bytes!\n");
-	printf("\t\t -f    Selectable Input the floder path where hex files in!\n");
-	printf("\t\t -u    please input output file name!\n");
-	printf("\t\t -w    please input image with pixels ! default 180\n");
-	printf("\t\t -h    please input image height!default 180 \n");
-	printf("\t\t -H    For usag informaion!\n");
+	printf("\t\t -i    转换ARM给的输入文件!\n");
+	printf("\t\t -o    转换ARM输入文件产生的输出文件!\n");
+	printf("\t\t -c    转换客户由ISP输出的文件!\n");
+	printf("\t\t -f    设置输入文件的路径（可选）!\n");
+	printf("\t\t -s    设置客户输出文件的line_offset（可选）\n");
+	printf("\t\t -t    设置line offset 中空白数据在行首还是行尾：0代表行尾，1代表行首！\n");
+    printf("\t\t -u    设置输出文件的名字!\n");
+	//printf("\t\t -m    设置输入数据的颜色格式，CIF--0:RAW, 1:RGB888, 2:YUV422_888, 默认为RAW，目前此参数开放 !\n");
+	printf("\t\t -r    设置输入文件的R色文件名（如果是YUV格式，则代表Y）!\n");
+	printf("\t\t -g    设置输入文件的G色文件名（如果是YUV格式，则代表U）!\n");
+	printf("\t\t -b    设置输入文件的B色文件名（如果是YUV格式，则代表V）!\n");
+    printf("\t\t -y    设置每个像素，单个颜色分量占用的bit数，例如16, 12, 10, 8, 4. 默认设置为14 !\n");
+	printf("\t\t -w    设置要转出图片的宽度（单位：像素），默认是180\n");
+	printf("\t\t -h    设置要转出图片的高度（单位：像素），默认是180\n");
+	printf("\t\t -H    输出帮助信息!\n");
     printf("\n\n");
 }
 
 int main(int argc, char *argv[])
 {
-    //QCoreApplication a(argc, argv);
-    //std::vector<uint8_t> buffer(width * 3 * 1); //get one row data mem
-    //const int radius = 300;
 	int ret = 0;
-#if FILE_TEST //RAW2B
-    const char* file_name = "new_image180180_c.bmp";
-    const char* fbmpR_name = "output_r14g14b14_buffer0.hex";
-    const char* fbmpG_name = "output_r14g14b14_buffer1.hex";
-    const char* fbmpB_name = "output_r14g14b14_buffer2.hex";
-#endif
-
-	uint8_t* pData = NULL;//buffer.data();
 	int ch;
-	uint8_t f_path = 0;
-	uint8_t f_outfile = 0;
-	uint32_t flen = 0;
 	
+	uint8_t  f_path    = 0;
+	uint8_t  f_outfile = 0;
+	uint8_t  f_infile  = 0;
+	uint32_t flen      = 0;
 	uint32_t u16_data_len = 0;
+	uint8_t  line_offset_flg = 0;
+	uint32_t line_blank = 0;
+	uint32_t expect_infile_size = 0;
+	
+	uint8_t* pData = NULL;//buffer.data();
+	uint8_t* pData1 = NULL;
+	uint8_t* pData2 = NULL;
 	
 	char input_path[256] ={ 0 };
+	char infile_r[128] ={ 0 };
+	char infile_g[128] ={ 0 };
+	char infile_b[128] ={ 0 };
 	char outfile_name[128] ={ 0 };
 	
 	uint32_t seek = 0;
@@ -270,15 +272,19 @@ int main(int argc, char *argv[])
 	uint8_t dataBL = 0;
 	uint8_t dataBH = 0;
 	
+	uint8_t w_s = 0; //表示设置宽度
+	uint8_t h_s = 0; //表示设置高度
+	
 	//char buff[8]={0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37};
     char strR[9];
     char strG[9];
     char strB[9];
 	
-	ARMIN = 0;
-	ARMOUT = 0;
-    TEST_ONE  = 0;
-	TEST_TWO  = 0;
+	arm_in = 0;
+	arm_out = 0;
+    custom_c = 0;
+	linef_b = 0;
+	line_offset  = per_color_bytes * width;
 	
 	printf("argc %d\n",argc);
 	if(argc < 2)
@@ -287,20 +293,35 @@ int main(int argc, char *argv[])
         exit(-1);
 	}
 	
-	while ((ch = getopt(argc, argv, "iockf:u:w:h:H?")) != -1)
+#if 0	
+	printf("\t\t -i    转换ARM的输入文件 !\n");
+	printf("\t\t -o    转换ARM输入文件产生的输出文件 !\n");
+	printf("\t\t -c    转换客户由ISP输出的文件 !\n");
+	printf("\t\t -f    设置输入文件的路径（可选）!\n");
+	printf("\t\t -s    设置客户输出文件的line_offset（可选）!\n");
+	printf("\t\t -t    设置line offset 中空白数据在行首还是行尾：0代表行尾，1代表行首 !\n");
+    printf("\t\t -u    设置输出文件的名字 !\n");
+	printf("\t\t -m    设置输入数据的颜色格式，CIF--0:RAW, 1:RGB888, 2:YUV422_888, 默认为RAW，目前此参数开放 !\n");
+	printf("\t\t -r    设置输入文件的R色文件名（如果是YUV格式，则代表Y）!\n");
+	printf("\t\t -g    设置输入文件的G色文件名（如果是YUV格式，则代表U）!\n");
+	printf("\t\t -b    设置输入文件的B色文件名（如果是YUV格式，则代表V）!\n");
+    printf("\t\t -y    设置每个像素，单个颜色分量占用的bit数，例如16, 12, 10, 8, 4. 默认设置为14 !\n");
+	printf("\t\t -w    设置要转出图片的宽度（单位：像素），默认是180 !\n");
+	printf("\t\t -h    设置要转出图片的高度（单位：像素），默认是180 !\n");
+	printf("\t\t -H    输出帮助信息!\n");
+#endif
+	
+	while ((ch = getopt(argc, argv, "iocf:s:t:u:m:r:g:b:y:w:h:H?")) != -1)
     {
         switch (ch) {
         case 'i':
-            ARMIN = 1;
+            arm_in = 1;
             break;
         case 'o':
-            ARMOUT = 1;
+            arm_out = 1;
             break;
 		case 'c':
-            TEST_ONE = 1;
-            break;
-		case 'k':
-            TEST_TWO = 1;
+            custom_c = 1;
             break;
 	    case 'f':
 		    f_path = 1;
@@ -318,15 +339,46 @@ int main(int argc, char *argv[])
 			}
 			//printf("case input_path = %s\n", input_path);
 			break;
-		case 'w':
-			width = atoi(optarg);
-			break;
-		case 'h':
-		    height = atoi(optarg);
-			break;
+		case 's':
+		    line_offset_flg = 1;
+            line_offset = atoi(optarg);
+            break;
+		case 't':
+            linef_b = atoi(optarg);
+			if(linef_b != 1)
+			{
+				linef_b = 0;
+			}
+            break;
 		case 'u':
 			f_outfile = 1;
 			sprintf(outfile_name, "%s", optarg);
+			break;
+		case 'm':
+		    //color_format = atoi(optarg);
+			break;
+		case 'r':
+			f_infile |= 1;
+			sprintf(infile_r, "%s", optarg);
+			break;
+		case 'g':
+			f_infile |= 1<<1;
+			sprintf(infile_g, "%s", optarg);
+			break;
+		case 'b':
+			f_infile |= 1<<2;
+			sprintf(infile_b, "%s", optarg);
+			break;
+		case 'y':
+		    pix_bits = atoi(optarg);
+			break;
+		case 'w':
+			w_s  = 1;
+			width = atoi(optarg);
+			break;
+		case 'h':
+		    h_s = 1;
+		    height = atoi(optarg);
 			break;
         case 'H':
         case '?':
@@ -336,53 +388,44 @@ int main(int argc, char *argv[])
         }   
     }
 	
-    if(ARMOUT)
+	if(w_s||h_s)
 	{
-		//file_name =  "image180180_armout.bmp";
-		//fbmpR_name = "output0_buffer.hex";
-		//fbmpG_name = "output1_buffer.hex";
-		//fbmpB_name = "output2_buffer.hex";
+		if(w_s == 0)
+		{
+			printf("缺少宽度参数，请检查输入的参数！\n");
+			return -1;
+		}
 		
+		if(h_s == 0)
+		{
+			printf("缺少高度参数，请检查输入的参数！\n");
+			return -1;
+		}
+		
+	}
+	
+    if(arm_out)
+	{
 		sprintf(file_name,  "%s%d%d%s", "image", width, height, "_armout.bmp");
 		sprintf(fbmpR_name, "%s", "output0_buffer.hex");
 		sprintf(fbmpG_name, "%s", "output1_buffer.hex");
 		sprintf(fbmpB_name, "%s", "output2_buffer.hex");
 	}
-    else if(ARMIN)
-    {
-        //file_name =  "image180180_armin.bmp";
-        //fbmpR_name = "input0_buffer.hex";
-        //fbmpG_name = "input1_buffer.hex";
-        //fbmpB_name = "input2_buffer.hex";
-		
+    else if(arm_in)
+    {		
 		sprintf(file_name,  "%s%d%d%s", "image", width, height, "_armin.bmp");
+		sprintf(file_name1,  "%s%d%d%s", "image", width, height, "_armin1.bmp");
+		sprintf(file_name2,  "%s%d%d%s", "image", width, height, "_armin2.bmp");
 		sprintf(fbmpR_name, "%s", "input0_buffer.hex");
 		sprintf(fbmpG_name, "%s", "input1_buffer.hex");
 		sprintf(fbmpB_name, "%s", "input2_buffer.hex");
 	}
-	else if(TEST_ONE)
+	else if(custom_c)
     {
-		//file_name = "output_image192180_with24bytes.bmp";
-        //fbmpR_name = "output_r14g14b14_buffer0.hex";
-        //fbmpG_name = "output_r14g14b14_buffer1.hex";
-        //fbmpB_name = "output_r14g14b14_buffer2.hex";
-		
-		sprintf(file_name,  "%s%d%d%s", "image", width, height, "_with24bytes.bmp");
+		sprintf(file_name,  "%s%d%d%s", "image", width, height, "_customs.bmp");
 		sprintf(fbmpR_name, "%s", "output_r14g14b14_buffer0.hex");
 		sprintf(fbmpG_name, "%s", "output_r14g14b14_buffer1.hex");
 		sprintf(fbmpB_name, "%s", "output_r14g14b14_buffer2.hex");
-	}
-    else if(TEST_TWO)
-    {
-		//file_name = "output_image192180_no24bytes.bmp";
-        //fbmpR_name = "output_r14g14b14_buffer0.hex";
-        //fbmpG_name = "output_r14g14b14_buffer1.hex";
-        //fbmpB_name = "output_r14g14b14_buffer2.hex";
-		
-		sprintf(file_name,  "%s%d%d%s", "image",width, height,"_no24bytes.bmp");
-		sprintf(fbmpR_name, "%s", "output_r14g14b14_buffer0.hex");
-		sprintf(fbmpG_name, "%s", "output_r14g14b14_buffer1.hex");
-		sprintf(fbmpB_name, "%s", "output_r14g14b14_buffer2.hex");		
 	}
 	
 	if(f_outfile)
@@ -391,7 +434,6 @@ int main(int argc, char *argv[])
 		uint8_t to = (outfile_name[len-1]^'p') |(outfile_name[len-2]^'m') \
 					| (outfile_name[len-3]^'b') | (outfile_name[len-4]^'.');
 		
-		//printf("to = %d\n", to);
 		if( to != 0)
 		{
 			sprintf(file_name, "%s%s", outfile_name, ".bmp");
@@ -404,6 +446,21 @@ int main(int argc, char *argv[])
 		}
 	}
 	
+	if(f_infile)
+	{
+		if(f_infile != 0x07)
+		{
+			printf("缺少输入文件，请检查输入的参数！\n");
+			return -1;
+		}
+		else
+		{
+		    sprintf(fbmpR_name, "%s", infile_r);
+		    sprintf(fbmpG_name, "%s", infile_g);
+		    sprintf(fbmpB_name, "%s", infile_b);
+		}
+	}
+
 	if(f_path)
 	{
 	    char tmpfile_name[256] = {0};
@@ -415,13 +472,29 @@ int main(int argc, char *argv[])
 		sprintf(tmpR_name, "%s%s", input_path, fbmpR_name);
         sprintf(tmpG_name, "%s%s", input_path, fbmpG_name);
         sprintf(tmpB_name, "%s%s", input_path, fbmpB_name);
-		
+			
 		strcpy(file_name, tmpfile_name);
 		strcpy(fbmpR_name, tmpR_name);
 		strcpy(fbmpG_name, tmpG_name);
 		strcpy(fbmpB_name, tmpB_name);
+		
+		if(arm_in)
+		{
+			memset(tmpfile_name, 0, 256);
+			sprintf(tmpfile_name, "%s%s", input_path, file_name1);
+			strcpy(file_name1, tmpfile_name);
+			
+			memset(tmpfile_name, 0, 256);
+			sprintf(tmpfile_name, "%s%s", input_path, file_name2);
+			strcpy(file_name2, tmpfile_name);
+		}
 	}
-    //printf("file_name : %s\n", file_name);
+    
+	//printf("file_name :  %s\n", file_name);
+	//printf("fbmpR_name : %s\n", fbmpR_name);
+	//printf("fbmpG_name : %s\n", fbmpG_name);
+	//printf("fbmpB_name : %s\n", fbmpB_name);
+	//return 0;
 
     //first creat file and write file header to file
     ret = createBmp_with_fileheader(width, height, depth, file_name);
@@ -430,14 +503,17 @@ int main(int argc, char *argv[])
 		printf("creat file %s fialed!\n", file_name);
 		return ret;
 	}
+	
 #if 0//get current path
+    #define MAX_PATH 256
     char Path[MAX_PATH];
     _getcwd(Path,MAX_PATH);
-
     printf("The Path= %s",Path);
 #endif
 
-    FILE *fpR = fopen(fbmpR_name, "rb+" );
+    expect_infile_size = (height*width/2)*9 + 8;
+
+    FILE *fpR = fopen(fbmpR_name, "rb" );
     if(fpR == NULL)
     {
         printf("Open %s file failed!\n", fbmpR_name);
@@ -446,31 +522,57 @@ int main(int argc, char *argv[])
     fseek(fpR,0L,SEEK_END); /* 定位到文件末尾 */
 	flen=ftell(fpR);
 	printf("%s file lenth %d!\n", fbmpR_name, flen);
+	if(flen < expect_infile_size )
+	{
+		printf(RED);
+		printf("错误！%s 实际数据大小少于预期！\n", fbmpR_name);
+		printf(NONE);
+		
+        fclose(fpR);
+        return -1;		
+	}
 	char *pdataR = (char *)malloc(sizeof(char) * flen);
-    if(pdataR == NULL)
+    
+	if(pdataR == NULL)
 	{
 		printf("Alloc data space fialed file = %s, len = %d!\n", fbmpR_name, flen);
+		fclose(fpR);
 		return -1;
 	}
-    memset(pdataR, 0, sizeof(char)*flen);
+    
+	memset(pdataR, 0, sizeof(char)*flen);
 	fseek(fpR,0L, 0);
 	fread(pdataR, 1, flen, fpR);
 	fclose(fpR);
 
 
-	FILE *fpG = fopen(fbmpG_name, "rb+" );
+	FILE *fpG = fopen(fbmpG_name, "rb" );
     if(fpG == NULL)
     {
         printf("Open %s file failed!\n", fbmpG_name);
+		free(pdataR);
         return -1;
     }
 	fseek(fpG,0L,SEEK_END); /* 定位到文件末尾 */
 	flen=ftell(fpG);
 	printf("%s file lenth %d!\n", fbmpG_name, flen);
+	
+	if(flen < expect_infile_size )
+	{
+		printf(RED);
+		printf("错误！%s 实际数据大小少于预期！\n", fbmpR_name);
+		printf(NONE);
+		free(pdataR);
+		fclose(fpG);
+        return -1;		
+	}
+	
 	char *pdataG = (char *)malloc(sizeof(char) * flen);
     if(pdataG == NULL)
 	{
 		printf("Alloc data space fialed file = %s, len = %d!\n", fbmpG_name, flen);
+		free(pdataR);
+		fclose(fpG);
 		return -1;
 	}		
 	memset(pdataG, 0, sizeof(char)*flen);
@@ -478,19 +580,36 @@ int main(int argc, char *argv[])
 	fread(pdataG, sizeof(char), flen, fpG);
     fclose(fpG);
 
-    FILE *fpB = fopen(fbmpB_name, "rb+" );
+    FILE *fpB = fopen(fbmpB_name, "rb" );
     if(fpB == NULL)
     {
         printf("Open %s file failed!\n", fbmpB_name);
+		free(pdataR);
+		free(pdataG);
         return -1;
     }
 	fseek(fpB,0L,SEEK_END); /* 定位到文件末尾 */
 	flen=ftell(fpB);
 	printf("%s file lenth %d!\n", fbmpB_name, flen);
+	
+	if(flen < expect_infile_size )
+	{
+		printf(RED);
+		printf("错误！%s 实际数据大小少于预期！\n", fbmpR_name);
+		printf(NONE);
+		free(pdataR);
+		free(pdataG);
+		fclose(fpB);
+        return -1;		
+	}
+	
 	char *pdataB = (char *)malloc(sizeof(char) * flen);
     if(pdataB == NULL)
 	{
 		printf("Alloc data space fialed file = %s, len = %d!\n", fbmpB_name, flen);
+		free(pdataR);
+		free(pdataG);
+		fclose(fpB);
 		return -1;
 	}
 	memset(pdataB, 0, sizeof(char)*flen);
@@ -502,17 +621,40 @@ int main(int argc, char *argv[])
 	if(pData == NULL)
 	{
 		printf("Alloc pData space fialed len = %d!\n", width * height * 3);
+		free(pdataR);
+		free(pdataG);
+		free(pdataB);
 		return -1;
 	}
 	memset(pData, 0, sizeof(uint8_t) * width * height * 3);
-#if FILE_TEST //put read data to a file
-                //FILE* fpstrR;
-                //fpstrR=fopen("bmpstrR.hex","w+");
-                //FILE* fpstrG;
-                //fpstrG=fopen("bmpstrG.hex","w+");
-                FILE* fpstrB;
-                fpstrB=fopen("bmpstrB.hex","w+");
-#endif
+	
+	if(arm_in)
+	{
+	    pData1 = (uint8_t *)malloc(sizeof(uint8_t) * width * height * 3);
+		if(pData1 == NULL)
+		{
+			printf("Alloc pData space fialed len = %d!\n", width * height * 3);
+			free(pdataR);
+			free(pdataG);
+			free(pdataB);
+			free(pData);
+			return -1;
+		}
+		memset(pData1, 0, sizeof(uint8_t) * width * height * 3);
+		
+	    pData2 = (uint8_t *)malloc(sizeof(uint8_t) * width * height * 3);
+		if(pData2 == NULL)
+		{
+			printf("Alloc pData space fialed len = %d!\n", width * height * 3);
+			free(pdataR);
+			free(pdataG);
+			free(pdataB);
+			free(pData);
+			free(pData1);
+			return -1;
+		}
+		memset(pData2, 0, sizeof(uint8_t) * width * height * 3);
+	}
 
 #if 0
     printf("%s first 72 bytes!\n", fbmpR_name);
@@ -547,48 +689,69 @@ int main(int argc, char *argv[])
     }
 	return 0;
 #endif
-    //printf("1...................!\n");
-#if 1
-    //FILE *fpbmpFile = fopen(file_name, "ab");
-	//printf("1.1..................!\n");
-	//if(fpbmpFile == NULL)
-	//{
-	//    printf("Open %s file failed!\n", file_name);
-    //    return -1;
-	//}
-	//printf("2...................!\n");
+
     u16_data_len = 0;
 	uint32_t i;
 	uint32_t j;
 	uint32_t count = width/2;
-	printf("2....height=%d...width=%d............!\n", height, count);
-    for (i = height; i > 0; i--)
+	
+	if(pix_bits <= 8)
+	{
+		per_color_bytes = 1;
+	}
+	else if(pix_bits <= 16)
+	{
+		per_color_bytes = 2;
+	}
+	else if(pix_bits <= 24)
+	{
+		per_color_bytes = 3;
+	}
+	else if(pix_bits <= 32)
+	{
+		per_color_bytes = 4;
+	}
+    
+	if(line_offset_flg == 0)
+	{
+		line_blank = 0;
+	}
+	
+	if(line_offset_flg == 1)
+	{
+		if(line_offset < (per_color_bytes * width))
+		{
+			line_blank = 0;
+			printf(RED);
+			printf("警告line_offset小于每行字节数!\n");
+			printf("line_offset =  %d\n", line_offset);
+			printf("per_line_bytes =  %d\n", per_color_bytes * width);
+			printf(NONE);			
+		}
+		else
+		{
+			line_blank = line_offset - (per_color_bytes * width);
+			line_blank = line_blank/per_color_bytes/2;
+		}
+	}
+	
+	printf("1....height=%d...width=%d............!\n", height, count);
+    
+	for (i = height; i > 0; i--)
     {
         for (j = 0; j < count; j++)
         {
-			if(ARMOUT|ARMIN) //2 column  1st:address(4 bytes)  2end:data(4 bytes 2 pixels 14bit of 1 pixel) 1 line 384 bytes
+			if(arm_out|arm_in) //2 column  1st:address(4 bytes)  2end:data(4 bytes 2 pixels 14bit of 1 pixel) 1 line 384 bytes
 			{
-				//seek = 18*(i)*(0 + count) + (2*j + 1)*9;
-				seek = 18*(i-1)*count + (2*j + 1)*9; // line offset 384(bytes) - (width)180*2(1(R/G/B) 14bit used 2 byte ) = 24(byte)/4=6
+				seek = 18*(i-1)*count + (2*j + 1)*9;
 			}
 
-			if(TEST_ONE)  // 1 column 1st row:address "@2000000" other rows are data  (4 bytes 2 pixels 14bit of 1 pixel) 1 line 360 bytes
+			if(custom_c)  // 1 column 1st row:address "@2000000" other rows are data  (4 bytes 2 pixels 14bit of 1 pixel) 1 line 360 bytes
 			{
-				seek = 9*(i*count + j) + 8;
+				seek = 9*((i-1)*(line_blank + count) + j) + 8 + (linef_b * line_blank)*9;
 				//seek = 9*(i/*-1*/)*(0 + width/2) + j*9 + 8; // param 6 == not using 24bytes every line end(width)180*2(1(R/G/B) 14bit used 2 byte )
 			}
 
-			if(TEST_TWO)  // 1 column 1st row:address "@2000000" other rows are data  (4 bytes 2 pixels 14bit of 1 pixel) 1 line 360 bytes
-			{
-				seek = 9*(i-1)*(6 + count) + j*9 + 8; // param 6 == not using 24bytes every line end(width)180*2(1(R/G/B) 14bit used 2 byte )
-			}
-#if LTOUTFIRST  // 1 column 1st row:address "@2000000" other rows are data  (4 bytes 2 pixels 14bit of 1 pixel)
-			//seek = 9*(i-1)*(6 + width/2) + j*9 + 8; // line offset 384(bytes) - (width)180*2(1(R/G/B) 14bit used 2 byte ) = 24(byte)/4=6
-#endif
-
-#if FILE_TEST
-			seek = 9*(180-i)*(6 + width/2) + j*9 + 8; //
-#endif
             //fseek(fpR, seek, 0);
 			//fseek(fpG, seek, 0);
 			//fseek(fpB, seek, 0);
@@ -608,7 +771,7 @@ int main(int argc, char *argv[])
 			//fread(strR, sizeof(char), 8, fpR);
 			//fread(strG, sizeof(char), 8, fpG);
 			//fread(strB, sizeof(char), 8, fpB);
-#if RAW2B
+			
             //pdataR -= seek;
 			//pdataB -= seek;
 			//pdataG -= seek;
@@ -624,55 +787,90 @@ int main(int argc, char *argv[])
 			dataGL = (uint8_t)(dataG&0x000000ff);
 
 			dataRH = (uint8_t)(0x000000ff&(dataR>>16));
-			dataRL = (uint8_t)(dataR&0x000000ff);			
-#endif
+			dataRL = (uint8_t)(dataR&0x000000ff);
+			
 			//printf("h:%d-w:%d : 0x%08x\n",i, j, dataB);
 			//printf("h:%d-w:%d : 0x%08x\n",i, j, dataR);
 			//printf("h:%d-w:%d : 0x%08x\n",i, j, dataG);
-#if FILE_TEST //put read data to a file
-			//printf("h:%d-w:%d : %s\n",180-i, j, strB);
-			//fprintf(fpstrR,"%s\n", strR);
-			//fprintf(fpstrG,"%s\n", strG);
-			fprintf(fpstrB,"%s\n", strB);
-#endif
-
+            //color_format
 #if RAW2B
-			pData[u16_data_len + 2] = dataBH;
-			pData[u16_data_len + 1] = dataGH;
-			pData[u16_data_len + 0] = dataRH;
+            if(arm_in)
+		    {
+				pData[u16_data_len + 2] = dataRH;
+				pData[u16_data_len + 1] = dataRH;
+				pData[u16_data_len + 0] = dataRH;
+				
+				pData1[u16_data_len + 2] = dataGH;
+				pData1[u16_data_len + 1] = dataGH;
+				pData1[u16_data_len + 0] = dataGH;
+				
+				pData2[u16_data_len + 2] = dataBH;
+				pData2[u16_data_len + 1] = dataBH;
+				pData2[u16_data_len + 0] = dataBH;
 
-            u16_data_len += 3;
+				u16_data_len += 3;
+				
+				pData1[u16_data_len + 2] = dataGL;
+				pData1[u16_data_len + 1] = dataGL;
+				pData1[u16_data_len + 0] = dataGL;
+				
+				pData2[u16_data_len + 2] = dataBL;
+				pData2[u16_data_len + 1] = dataBL;
+				pData2[u16_data_len + 0] = dataBL;
 
-			pData[u16_data_len + 2] = dataBL;
-			pData[u16_data_len + 1] = dataGL;
-			pData[u16_data_len + 0] = dataRL;
+				pData[u16_data_len + 2] = dataRL;
+				pData[u16_data_len + 1] = dataRL;
+				pData[u16_data_len + 0] = dataRL;
 
-			u16_data_len += 3;
+				u16_data_len += 3;
+			}
+			else
+			{
+				pData[u16_data_len + 2] = dataBH;
+				pData[u16_data_len + 1] = dataGH;
+				pData[u16_data_len + 0] = dataRH;
+
+				u16_data_len += 3;
+
+				pData[u16_data_len + 2] = dataBL;
+				pData[u16_data_len + 1] = dataGL;
+				pData[u16_data_len + 0] = dataRL;
+
+				u16_data_len += 3;
+			}
 #endif
 		}
-		printf("h:%d-w:%d : %d\n",i, j, u16_data_len);
+		//printf("h:%d-w:%d : %d\n",i, j, u16_data_len);
     }
 	
 #if RAW2B
     //createBMP((uint8_t*)buffer.data(), width, height, depth, file_name);
 	createBMP((uint8_t*)pData, width, height, depth, file_name);
+	if(arm_in)
+	{
+		createBMP((uint8_t*)pData1, width, height, depth, file_name1);
+		createBMP((uint8_t*)pData2, width, height, depth, file_name2);
+	}
 #endif
 
-#endif
-
-#if FILE_TEST //put read data to a file
-      printf("4...................!\n");
-     //fclose(fpstrR);
-     //fclose(fpstrG);
-     fclose(fpstrB);
-
-#endif
     free(pdataR);
 	free(pdataG);
 	free(pdataB);
 	free(pData);
-    printf(RED "Creat file %s done!\n" NONE,file_name);
+	
+	if(arm_in)
+	{
+		free(pData1);
+		free(pData2);
+		printf(RED "Creat file %s done!\n" NONE,file_name);
+		printf(RED "Creat file %s done!\n" NONE,file_name1);
+		printf(RED "Creat file %s done!\n" NONE,file_name2);
+		
+	}
+	else
+	{
+		printf(RED "Creat file %s done!\n" NONE,file_name);
+	}
 
-    //return a.exec();
     return 0;
 }

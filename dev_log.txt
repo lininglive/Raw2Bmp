@@ -1,0 +1,24 @@
+list
+1. CIF RAW RGB888 YUV422_888数据的验证，暂时不支持，目前无法确认输出文件的形式，以及数据的存放规范。
+
+2. armin 文件的转成3张单独的
+3. 输入文件的大小的检查。 done
+4. line offset的验证 isp out 有line offset ok
+5. 1080p文件的验证 ok
+6. 优化文件读写 penging
+
+	printf("\t\t -i    转换ARM的输入文件 !\n");
+	printf("\t\t -o    转换ARM输入文件产生的输出文件 !\n");
+	printf("\t\t -c    转换客户由ISP输出的文件 !\n");
+	printf("\t\t -f    设置输入文件的路径（可选）!\n");
+	printf("\t\t -s    设置客户输出文件的line_offset（可选）!\n");
+	printf("\t\t -t    设置line offset 中空白数据在行首还是行尾：0代表行尾，1代表行首 !\n");
+    printf("\t\t -u    设置输出文件的名字 !\n");
+	printf("\t\t -m    设置输入数据的颜色格式，CIF--0:RAW, 1:RGB888, 2:YUV422_888, 默认为RAW，目前此参数开放 !\n");
+	printf("\t\t -r    设置输入文件的R色文件名（如果是YUV格式，则代表Y）!\n");
+	printf("\t\t -g    设置输入文件的G色文件名（如果是YUV格式，则代表U）!\n");
+	printf("\t\t -b    设置输入文件的B色文件名（如果是YUV格式，则代表V）!\n");
+    printf("\t\t -y    设置每个像素，单个颜色分量占用的bit数，例如16, 12, 10, 8, 4. 默认设置为14 !\n");
+	printf("\t\t -w    设置要转出图片的宽度（单位：像素），默认是180 !\n");
+	printf("\t\t -h    设置要转出图片的高度（单位：像素），默认是180 !\n");
+	printf("\t\t -H    输出帮助信息!\n");
