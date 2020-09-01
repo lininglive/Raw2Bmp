@@ -25,9 +25,10 @@ uint32_t line_offset = 0;
 
 uint8_t per_color_bytes = 2;
 uint8_t pix_bits        = 14;
-//uint8_t color_format    = 0; //CIF 0:RAW 1:RGB 2:YUV
+uint8_t color_format    = 9; //CIF mode 0:RAW 1:RGB 2:YUV //9 is default value indicate in ISP output mode
 
 #define RAW2B 1
+#define debug 0
 
 #define BI_RGB       0         //不压缩（最常用）
 #define BI_RLE8      1         //8比特游程编码（BLE），只用于8位位图
@@ -37,13 +38,8 @@ uint8_t pix_bits        = 14;
 #define NONE         "\033[m" 
 #define RED          "\033[0;32;31m"
 
+#define CLIP(color) (unsigned char)(((color) > 0xFF) ? 0xff : (((color) < 0) ? 0 : (color)))
 
-char file_name[256]  =  "image180180_armout.bmp";
-char file_name1[256]  =  "image180180_armout1.bmp";
-char file_name2[256]  =  "image180180_armout2.bmp";
-char fbmpR_name[256] = "output0_buffer.hex";
-char fbmpG_name[256] = "output1_buffer.hex";
-char fbmpB_name[256] = "output2_buffer.hex";
 //char bmp_suffix[]    = ".bmp";	
 
 #pragma pack(2) // 让编译器做2字节对齐 
@@ -163,7 +159,12 @@ int createBmp_with_fileheader(uint32_t width, uint32_t height, uint16_t depth, c
 		return 0;
 }
 
-
+/*
+*  convert string hex char to unsigned int
+*  char* str -- input str
+*  count str length
+*  return unsigned int value
+*/
 unsigned int matoi(char* str, int count)
 {
     unsigned int tmp = 0;
@@ -211,6 +212,10 @@ unsigned int matoi(char* str, int count)
     return tmp;
 }
 
+
+/*
+* help information
+*/
 static void usage(char* name)
 {
     printf("\nNAME\n");
@@ -225,7 +230,8 @@ static void usage(char* name)
 	printf("\t\t -s    设置客户输出文件的line_offset（可选）\n");
 	printf("\t\t -t    设置line offset 中空白数据在行首还是行尾：0代表行尾，1代表行首！\n");
     printf("\t\t -u    设置输出文件的名字!\n");
-	//printf("\t\t -m    设置输入数据的颜色格式，CIF--0:RAW, 1:RGB888, 2:YUV422_888, 默认为RAW，目前此参数开放 !\n");
+    printf("\t\t -m    设置输入数据的颜色格式，CIF mode -- 1:RGB888, 2:YUV422_888,CIF模式下请用-r 指明输入文件\n");
+	printf("\t\t       默认为 isp raw format, ISP mode -- 9:RAW, 8:RGB888, 7:YUV422_888\n");
 	printf("\t\t -r    设置输入文件的R色文件名（如果是YUV格式，则代表Y）!\n");
 	printf("\t\t -g    设置输入文件的G色文件名（如果是YUV格式，则代表U）!\n");
 	printf("\t\t -b    设置输入文件的B色文件名（如果是YUV格式，则代表V）!\n");
@@ -238,32 +244,40 @@ static void usage(char* name)
 
 int main(int argc, char *argv[])
 {
-	int ret = 0;
+	//int ret = 0;
 	int ch;
 	
-	uint8_t  f_path    = 0;
-	uint8_t  f_outfile = 0;
-	uint8_t  f_infile  = 0;
-	uint32_t flen      = 0;
-	uint32_t u16_data_len = 0;
+	uint8_t  f_path    = 0; //0:using current path
+	uint8_t  f_outfile = 0; //0:using default output file name 1:indicate output filename
+	uint8_t  f_infile  = 0; //0:using default input file name  1:indicate input filename 
 	uint8_t  line_offset_flg = 0;
+	
+	uint32_t flen      = 0;
 	uint32_t line_blank = 0;
+	uint32_t u16_data_len = 0;
 	uint32_t expect_infile_size = 0;
 	
-	uint8_t* pData = NULL;//buffer.data();
+	uint8_t* pData0 = NULL;//buffer.data();
 	uint8_t* pData1 = NULL;
 	uint8_t* pData2 = NULL;
 	
-	char input_path[256] ={ 0 };
-	char infile_r[128] ={ 0 };
-	char infile_g[128] ={ 0 };
-	char infile_b[128] ={ 0 };
+	char input_path[256]   ={ 0 };
+	char infile_r[128]     ={ 0 };
+	char infile_g[128]     ={ 0 };
+	char infile_b[128]     ={ 0 };
 	char outfile_name[128] ={ 0 };
 	
 	uint32_t seek = 0;
-    unsigned int dataR = 0;
-    unsigned int dataG = 0;
-    unsigned int dataB = 0;
+	uint32_t seekuv = 0;
+	
+    uint32_t dataR = 0;
+    uint32_t dataG = 0;
+    uint32_t dataB = 0;
+	
+	uint8_t dataY0 = 0;
+    uint8_t dataY1 = 0;
+    uint8_t dataU = 0;
+	uint8_t dataV = 0;
 	
 	uint8_t dataRL = 0;
 	uint8_t dataRH = 0;
@@ -271,6 +285,8 @@ int main(int argc, char *argv[])
 	uint8_t dataGH = 0;
 	uint8_t dataBL = 0;
 	uint8_t dataBH = 0;
+	
+	uint8_t addre_line_len = 0;
 	
 	uint8_t w_s = 0; //表示设置宽度
 	uint8_t h_s = 0; //表示设置高度
@@ -280,11 +296,21 @@ int main(int argc, char *argv[])
     char strG[9];
     char strB[9];
 	
-	arm_in = 0;
-	arm_out = 0;
+	arm_in   = 0;
+	arm_out  = 0;
     custom_c = 0;
-	linef_b = 0;
-	line_offset  = per_color_bytes * width;
+	linef_b  = 0;
+	line_offset = per_color_bytes * width;
+	
+	//program output bmp files' default name
+    char file_name0[256]  = "image180180_armout0.bmp";
+    char file_name1[256]  = "image180180_armout1.bmp";
+    char file_name2[256]  = "image180180_armout2.bmp";
+
+    //program input data files from ISP or CIF
+    char fbmpR_name[256]  = "output0_buffer.hex";
+    char fbmpG_name[256]  = "output1_buffer.hex";
+    char fbmpB_name[256]  = "output2_buffer.hex";
 	
 	printf("argc %d\n",argc);
 	if(argc < 2)
@@ -301,7 +327,8 @@ int main(int argc, char *argv[])
 	printf("\t\t -s    设置客户输出文件的line_offset（可选）!\n");
 	printf("\t\t -t    设置line offset 中空白数据在行首还是行尾：0代表行尾，1代表行首 !\n");
     printf("\t\t -u    设置输出文件的名字 !\n");
-	printf("\t\t -m    设置输入数据的颜色格式，CIF--0:RAW, 1:RGB888, 2:YUV422_888, 默认为RAW，目前此参数开放 !\n");
+    printf("\t\t -m    设置输入数据的颜色格式，CIF mode -- 0:RAW, 1:RGB888, 2:YUV422_888,CIF模式下请用-r 指明输入文件"\n);
+	printf("\t\t       默认为 isp raw format, ISP mode -- 9:RAW, 8:RGB888, 7:YUV422_888\n");
 	printf("\t\t -r    设置输入文件的R色文件名（如果是YUV格式，则代表Y）!\n");
 	printf("\t\t -g    设置输入文件的G色文件名（如果是YUV格式，则代表U）!\n");
 	printf("\t\t -b    设置输入文件的B色文件名（如果是YUV格式，则代表V）!\n");
@@ -355,7 +382,7 @@ int main(int argc, char *argv[])
 			sprintf(outfile_name, "%s", optarg);
 			break;
 		case 'm':
-		    //color_format = atoi(optarg);
+		    color_format = atoi(optarg);
 			break;
 		case 'r':
 			f_infile |= 1;
@@ -404,16 +431,52 @@ int main(int argc, char *argv[])
 		
 	}
 	
+	if(color_format <= 9)
+	{
+		switch(color_format)
+		{
+			case 0: //CIF mode RAW
+			case 1: //CIF mode RGB888
+			case 2: //CIF mode YUV422_888
+			{
+				if(f_infile == 0)
+				{
+				    printf("缺少输入文件，请检查输入的参数！\n");
+				    return -1;
+				}
+				if(f_outfile == 0)
+				{
+				    sprintf(file_name0, "%s%d%s", "cif_output_", color_format, ".bmp");
+				}
+				break;
+			}
+			case 9: //ISP mode RAW
+			case 8: //ISP mode GRB888
+			case 7: //ISP mode YUV422_888
+			    break;
+			default:
+			{
+				printf("颜色格式设置错误，请检查输入的参数！\n");
+				return -1;
+			}
+		}		
+	}
+	else
+	{
+		printf("颜色格式设置错误，请检查输入的参数！\n");
+	    return -1;
+	}
+	
     if(arm_out)
 	{
-		sprintf(file_name,  "%s%d%d%s", "image", width, height, "_armout.bmp");
+		sprintf(file_name0,  "%s%d%d%s", "image", width, height, "_armout.bmp");
 		sprintf(fbmpR_name, "%s", "output0_buffer.hex");
 		sprintf(fbmpG_name, "%s", "output1_buffer.hex");
 		sprintf(fbmpB_name, "%s", "output2_buffer.hex");
 	}
     else if(arm_in)
     {		
-		sprintf(file_name,  "%s%d%d%s", "image", width, height, "_armin.bmp");
+		sprintf(file_name0,  "%s%d%d%s", "image", width, height, "_armin.bmp");
 		sprintf(file_name1,  "%s%d%d%s", "image", width, height, "_armin1.bmp");
 		sprintf(file_name2,  "%s%d%d%s", "image", width, height, "_armin2.bmp");
 		sprintf(fbmpR_name, "%s", "input0_buffer.hex");
@@ -422,7 +485,7 @@ int main(int argc, char *argv[])
 	}
 	else if(custom_c)
     {
-		sprintf(file_name,  "%s%d%d%s", "image", width, height, "_customs.bmp");
+		sprintf(file_name0,  "%s%d%d%s", "image", width, height, "_customs.bmp");
 		sprintf(fbmpR_name, "%s", "output_r14g14b14_buffer0.hex");
 		sprintf(fbmpG_name, "%s", "output_r14g14b14_buffer1.hex");
 		sprintf(fbmpB_name, "%s", "output_r14g14b14_buffer2.hex");
@@ -436,28 +499,35 @@ int main(int argc, char *argv[])
 		
 		if( to != 0)
 		{
-			sprintf(file_name, "%s%s", outfile_name, ".bmp");
-			//printf("1 file_name len : %s, %d\n", file_name, len);   
+			sprintf(file_name0, "%s%s", outfile_name, ".bmp");
+			//printf("1 file_name0 len : %s, %d\n", file_name0, len);   
 		}
 		else
 		{
-			sprintf(file_name, "%s", outfile_name);
-			//printf("2 file_name len : %s, %d\n", file_name, len);
+			sprintf(file_name0, "%s", outfile_name);
+			//printf("2 file_name0 len : %s, %d\n", file_name0, len);
 		}
 	}
 	
 	if(f_infile)
 	{
-		if(f_infile != 0x07)
+		if((color_format >= 0)&&(color_format < 3))
 		{
-			printf("缺少输入文件，请检查输入的参数！\n");
-			return -1;
+			sprintf(fbmpR_name, "%s", infile_r);
 		}
 		else
 		{
-		    sprintf(fbmpR_name, "%s", infile_r);
-		    sprintf(fbmpG_name, "%s", infile_g);
-		    sprintf(fbmpB_name, "%s", infile_b);
+			if(f_infile != 0x07)
+			{
+				printf("缺少输入文件，请检查输入的参数！\n");
+				return -1;
+			}
+			else
+			{
+				sprintf(fbmpR_name, "%s", infile_r);
+				sprintf(fbmpG_name, "%s", infile_g);
+				sprintf(fbmpB_name, "%s", infile_b);
+			}
 		}
 	}
 
@@ -468,12 +538,12 @@ int main(int argc, char *argv[])
 		char tmpG_name[256] = {0};
 		char tmpB_name[256] = {0};
 		
-		sprintf(tmpfile_name, "%s%s", input_path, file_name);
+		sprintf(tmpfile_name, "%s%s", input_path, file_name0);
 		sprintf(tmpR_name, "%s%s", input_path, fbmpR_name);
         sprintf(tmpG_name, "%s%s", input_path, fbmpG_name);
         sprintf(tmpB_name, "%s%s", input_path, fbmpB_name);
 			
-		strcpy(file_name, tmpfile_name);
+		strcpy(file_name0, tmpfile_name);
 		strcpy(fbmpR_name, tmpR_name);
 		strcpy(fbmpG_name, tmpG_name);
 		strcpy(fbmpB_name, tmpB_name);
@@ -490,19 +560,19 @@ int main(int argc, char *argv[])
 		}
 	}
     
-	//printf("file_name :  %s\n", file_name);
+	//printf("file_name0 :  %s\n", file_name0);
 	//printf("fbmpR_name : %s\n", fbmpR_name);
 	//printf("fbmpG_name : %s\n", fbmpG_name);
 	//printf("fbmpB_name : %s\n", fbmpB_name);
 	//return 0;
 
     //first creat file and write file header to file
-    ret = createBmp_with_fileheader(width, height, depth, file_name);
+    /*int ret = createBmp_with_fileheader(width, height, depth, file_name0);
 	if(ret == -1)
 	{
-		printf("creat file %s fialed!\n", file_name);
+		printf("creat file %s fialed!\n", file_name0);
 		return ret;
-	}
+	}*/
 	
 #if 0//get current path
     #define MAX_PATH 256
@@ -512,7 +582,11 @@ int main(int argc, char *argv[])
 #endif
 
     expect_infile_size = (height*width/2)*9 + 8;
-
+	if(color_format == 7) //yuv422_888  u v data length = y data length/2
+	{	
+        expect_infile_size =  expect_infile_size / 2;
+	}
+	
     FILE *fpR = fopen(fbmpR_name, "rb" );
     if(fpR == NULL)
     {
@@ -522,6 +596,7 @@ int main(int argc, char *argv[])
     fseek(fpR,0L,SEEK_END); /* 定位到文件末尾 */
 	flen=ftell(fpR);
 	printf("%s file lenth %d!\n", fbmpR_name, flen);
+	
 	if(flen < expect_infile_size )
 	{
 		printf(RED);
@@ -544,100 +619,137 @@ int main(int argc, char *argv[])
 	fseek(fpR,0L, 0);
 	fread(pdataR, 1, flen, fpR);
 	fclose(fpR);
-
-
-	FILE *fpG = fopen(fbmpG_name, "rb" );
-    if(fpG == NULL)
+	
+	//find frist line length address line
+	addre_line_len = 0;
+	while(addre_line_len < flen)
     {
-        printf("Open %s file failed!\n", fbmpG_name);
-		free(pdataR);
-        return -1;
-    }
-	fseek(fpG,0L,SEEK_END); /* 定位到文件末尾 */
-	flen=ftell(fpG);
-	printf("%s file lenth %d!\n", fbmpG_name, flen);
-	
-	if(flen < expect_infile_size )
-	{
-		printf(RED);
-		printf("错误！%s 实际数据大小少于预期！\n", fbmpR_name);
-		printf(NONE);
-		free(pdataR);
-		fclose(fpG);
-        return -1;		
+	    if((pdataR[addre_line_len] == 0x0a)||(pdataR[addre_line_len] == 0x0d))
+		{
+			addre_line_len = addre_line_len + 1;
+			printf("address line length is %d\n", addre_line_len);
+			break;
+		}
+		addre_line_len++;
 	}
 	
-	char *pdataG = (char *)malloc(sizeof(char) * flen);
-    if(pdataG == NULL)
+    char *pdataG = NULL;
+	char *pdataB = NULL;
+	
+    if((color_format > 6)&&(color_format < 10))
 	{
-		printf("Alloc data space fialed file = %s, len = %d!\n", fbmpG_name, flen);
-		free(pdataR);
+		FILE *fpG = fopen(fbmpG_name, "rb" );
+		if(fpG == NULL)
+		{
+			printf("Open %s file failed!\n", fbmpG_name);
+			free(pdataR);
+			return -1;
+		}
+		fseek(fpG,0L,SEEK_END); /* 定位到文件末尾 */
+		flen=ftell(fpG);
+		printf("%s file lenth %d!\n", fbmpG_name, flen);
+		
+		if(flen < expect_infile_size )
+		{
+			printf(RED);
+			printf("错误！%s 实际数据大小少于预期！\n", fbmpR_name);
+			printf(NONE);
+			free(pdataR);
+			fclose(fpG);
+			return -1;		
+		}
+		
+		pdataG = (char *)malloc(sizeof(char) * flen);
+		if(pdataG == NULL)
+		{
+			printf("Alloc data space fialed file = %s, len = %d!\n", fbmpG_name, flen);
+			free(pdataR);
+			fclose(fpG);
+			return -1;
+		}		
+		memset(pdataG, 0, sizeof(char)*flen);
+		fseek(fpG,0L, 0);
+		fread(pdataG, sizeof(char), flen, fpG);
 		fclose(fpG);
-		return -1;
-	}		
-	memset(pdataG, 0, sizeof(char)*flen);
-	fseek(fpG,0L, 0);
-	fread(pdataG, sizeof(char), flen, fpG);
-    fclose(fpG);
 
-    FILE *fpB = fopen(fbmpB_name, "rb" );
-    if(fpB == NULL)
-    {
-        printf("Open %s file failed!\n", fbmpB_name);
-		free(pdataR);
-		free(pdataG);
-        return -1;
-    }
-	fseek(fpB,0L,SEEK_END); /* 定位到文件末尾 */
-	flen=ftell(fpB);
-	printf("%s file lenth %d!\n", fbmpB_name, flen);
-	
-	if(flen < expect_infile_size )
-	{
-		printf(RED);
-		printf("错误！%s 实际数据大小少于预期！\n", fbmpR_name);
-		printf(NONE);
-		free(pdataR);
-		free(pdataG);
+		FILE *fpB = fopen(fbmpB_name, "rb" );
+		if(fpB == NULL)
+		{
+			printf("Open %s file failed!\n", fbmpB_name);
+			free(pdataR);
+			free(pdataG);
+			return -1;
+		}
+		fseek(fpB,0L,SEEK_END); /* 定位到文件末尾 */
+		flen=ftell(fpB);
+		printf("%s file lenth %d!\n", fbmpB_name, flen);
+		
+		if(flen < expect_infile_size )
+		{
+			printf(RED);
+			printf("错误！%s 实际数据大小少于预期！\n", fbmpR_name);
+			printf(NONE);
+			free(pdataR);
+			free(pdataG);
+			fclose(fpB);
+			return -1;		
+		}
+		
+		pdataB = (char *)malloc(sizeof(char) * flen);
+		if(pdataB == NULL)
+		{
+			printf("Alloc data space fialed file = %s, len = %d!\n", fbmpB_name, flen);
+			free(pdataR);
+			free(pdataG);
+			fclose(fpB);
+			return -1;
+		}
+		memset(pdataB, 0, sizeof(char)*flen);
+		fseek(fpB,0L, 0);
+		fread(pdataB, sizeof(char), flen, fpB);
 		fclose(fpB);
-        return -1;		
 	}
+
 	
-	char *pdataB = (char *)malloc(sizeof(char) * flen);
-    if(pdataB == NULL)
+	pData0 = (uint8_t *)malloc(sizeof(uint8_t) * width * height * 3);
+	if(pData0 == NULL)
 	{
-		printf("Alloc data space fialed file = %s, len = %d!\n", fbmpB_name, flen);
+		printf("Alloc pData0 space fialed len = %d!\n", width * height * 3);
 		free(pdataR);
-		free(pdataG);
-		fclose(fpB);
+
+		if(pdataG != NULL)
+		{
+			free(pdataG);
+		}
+		
+		if(pdataB != NULL)
+		{
+		    free(pdataB);
+		}
+		
 		return -1;
 	}
-	memset(pdataB, 0, sizeof(char)*flen);
-	fseek(fpB,0L, 0);
-	ret = fread(pdataB, sizeof(char), flen, fpB);
-    fclose(fpB);
-	
-	pData = (uint8_t *)malloc(sizeof(uint8_t) * width * height * 3);
-	if(pData == NULL)
-	{
-		printf("Alloc pData space fialed len = %d!\n", width * height * 3);
-		free(pdataR);
-		free(pdataG);
-		free(pdataB);
-		return -1;
-	}
-	memset(pData, 0, sizeof(uint8_t) * width * height * 3);
+	memset(pData0, 0, sizeof(uint8_t) * width * height * 3);
 	
 	if(arm_in)
 	{
 	    pData1 = (uint8_t *)malloc(sizeof(uint8_t) * width * height * 3);
 		if(pData1 == NULL)
 		{
-			printf("Alloc pData space fialed len = %d!\n", width * height * 3);
+			printf("Alloc pData1 space fialed len = %d!\n", width * height * 3);
 			free(pdataR);
-			free(pdataG);
-			free(pdataB);
-			free(pData);
+			
+			if(pdataG != NULL)
+			{
+				free(pdataG);
+			}			
+			
+			if(pdataB != NULL)
+			{
+				free(pdataB);
+			}
+			
+			free(pData0);
 			return -1;
 		}
 		memset(pData1, 0, sizeof(uint8_t) * width * height * 3);
@@ -645,11 +757,19 @@ int main(int argc, char *argv[])
 	    pData2 = (uint8_t *)malloc(sizeof(uint8_t) * width * height * 3);
 		if(pData2 == NULL)
 		{
-			printf("Alloc pData space fialed len = %d!\n", width * height * 3);
+			printf("Alloc pData2 space fialed len = %d!\n", width * height * 3);
 			free(pdataR);
-			free(pdataG);
-			free(pdataB);
-			free(pData);
+			
+			if(pdataG != NULL)
+			{
+				free(pdataG);
+			}
+			if(pdataB != NULL)
+			{
+			    free(pdataB);
+			}
+			
+			free(pData0);
 			free(pData1);
 			return -1;
 		}
@@ -736,116 +856,284 @@ int main(int argc, char *argv[])
 	}
 	
 	printf("1....height=%d...width=%d............!\n", height, count);
-    
-	for (i = height; i > 0; i--)
-    {
-        for (j = 0; j < count; j++)
-        {
-			if(arm_out|arm_in) //2 column  1st:address(4 bytes)  2end:data(4 bytes 2 pixels 14bit of 1 pixel) 1 line 384 bytes
+    if((color_format > 6)&&(color_format < 10))
+	{   
+		for (i = height; i > 0; i--)
+		{
+			if(color_format == 7)//yuv422_888
 			{
-				seek = 18*(i-1)*count + (2*j + 1)*9;
-			}
-
-			if(custom_c)  // 1 column 1st row:address "@2000000" other rows are data  (4 bytes 2 pixels 14bit of 1 pixel) 1 line 360 bytes
-			{
-				seek = 9*((i-1)*(line_blank + count) + j) + 8 + (linef_b * line_blank)*9;
-				//seek = 9*(i/*-1*/)*(0 + width/2) + j*9 + 8; // param 6 == not using 24bytes every line end(width)180*2(1(R/G/B) 14bit used 2 byte )
-			}
-
-            //fseek(fpR, seek, 0);
-			//fseek(fpG, seek, 0);
-			//fseek(fpB, seek, 0);
-			//printf("h:%d-w:%d : seek:%d\n",i, j, seek);
-			
-			memset(strR, 0, 9);
-			memset(strG, 0, 9);
-			memset(strB, 0, 9);
-
-            //pdataR += seek;
-			//pdataB += seek;
-			//pdataG += seek;
-			
-            memcpy(strR, &pdataR[seek], 8);
-			memcpy(strG, &pdataG[seek], 8);
-			memcpy(strB, &pdataB[seek], 8);
-			//fread(strR, sizeof(char), 8, fpR);
-			//fread(strG, sizeof(char), 8, fpG);
-			//fread(strB, sizeof(char), 8, fpB);
-			
-            //pdataR -= seek;
-			//pdataB -= seek;
-			//pdataG -= seek;
-			
-			dataR = matoi(strR,8);
-			dataG = matoi(strG,8);
-			dataB = matoi(strB,8);
-			
-			dataBH = (uint8_t)(0x000000ff&(dataB>>16));
-			dataBL = (uint8_t)(dataB&0x000000ff);
-			
-			dataGH = (uint8_t)(0x000000ff&(dataG>>16));
-			dataGL = (uint8_t)(dataG&0x000000ff);
-
-			dataRH = (uint8_t)(0x000000ff&(dataR>>16));
-			dataRL = (uint8_t)(dataR&0x000000ff);
-			
-			//printf("h:%d-w:%d : 0x%08x\n",i, j, dataB);
-			//printf("h:%d-w:%d : 0x%08x\n",i, j, dataR);
-			//printf("h:%d-w:%d : 0x%08x\n",i, j, dataG);
-            //color_format
-#if RAW2B
-            if(arm_in)
-		    {
-				pData[u16_data_len + 2] = dataRH;
-				pData[u16_data_len + 1] = dataRH;
-				pData[u16_data_len + 0] = dataRH;
+				for (j = 0; j < count; j++)
+				{
+					seek = 9*((i-1)*(line_blank + count) + j) + addre_line_len + (linef_b * line_blank)*9;
+					seekuv = 9*((i-1)*(line_blank + count) + j)/2 + addre_line_len + (linef_b * line_blank)*9/2;
+					//seekuv = 9*((i-1)*(line_blank/2 + count/2) + j/2) + addre_line_len + (linef_b * line_blank/2)*9;
 				
-				pData1[u16_data_len + 2] = dataGH;
-				pData1[u16_data_len + 1] = dataGH;
-				pData1[u16_data_len + 0] = dataGH;
-				
-				pData2[u16_data_len + 2] = dataBH;
-				pData2[u16_data_len + 1] = dataBH;
-				pData2[u16_data_len + 0] = dataBH;
+					memset(strR, 0, 9);
+					memset(strG, 0, 9);
+					memset(strB, 0, 9);
 
-				u16_data_len += 3;
-				
-				pData1[u16_data_len + 2] = dataGL;
-				pData1[u16_data_len + 1] = dataGL;
-				pData1[u16_data_len + 0] = dataGL;
-				
-				pData2[u16_data_len + 2] = dataBL;
-				pData2[u16_data_len + 1] = dataBL;
-				pData2[u16_data_len + 0] = dataBL;
+					memcpy(strR, &pdataR[seek], 8);
+					memcpy(strG, &pdataG[seekuv], 8);
+					memcpy(strB, &pdataB[seekuv], 8);
+					
+					dataR = matoi(strR,8);
+					dataG = matoi(strG,8);
+					dataB = matoi(strB,8);
+					
+					dataV = (uint8_t)(0x000000ff&(dataB>>((j%2?0:1)*16)));
+					dataU = (uint8_t)(0x000000ff&(dataG>>((j%2?0:1)*16)));
+					dataY0 = (uint8_t)(0x000000ff&(dataR>>16));
+					dataY1 = (uint8_t)(dataR&0x000000ff);
+					
+					//R = Y + 1.4075 *（V-128）
+					//G = Y – 0.3455 *（U –128） – 0.7169 *（V –128）
+					//B = Y + 1.779 *（U – 128）
+					
+					dataBH = CLIP(dataY0 + 1.779*(dataU-128));
+					dataBL = CLIP(dataY1 + 1.779*(dataU-128));
+					
+					dataGH = CLIP(dataY0 - 0.3455*(dataU-128) - 0.7169*(dataV -128));
+					dataGL = CLIP(dataY1 - 0.3455*(dataU-128) - 0.7169*(dataV -128));
 
-				pData[u16_data_len + 2] = dataRL;
-				pData[u16_data_len + 1] = dataRL;
-				pData[u16_data_len + 0] = dataRL;
+					dataRH = CLIP(dataY0 + 1.4075*(dataV -128));
+					dataRL = CLIP(dataY1 + 1.4075*(dataV -128));
 
-				u16_data_len += 3;
+					pData0[u16_data_len + 2] = dataBH;
+					pData0[u16_data_len + 1] = dataGH;
+					pData0[u16_data_len + 0] = dataRH;
+
+					u16_data_len += 3;
+
+					pData0[u16_data_len + 2] = dataBL;
+					pData0[u16_data_len + 1] = dataGL;
+					pData0[u16_data_len + 0] = dataRL;
+
+					u16_data_len += 3;
+				}
 			}
 			else
 			{
-				pData[u16_data_len + 2] = dataBH;
-				pData[u16_data_len + 1] = dataGH;
-				pData[u16_data_len + 0] = dataRH;
+				for (j = 0; j < count; j++)
+				{
+					if(arm_out|arm_in) //2 column  1st:address(4 bytes)  2end:data(4 bytes 2 pixels 14bit of 1 pixel) 1 line 384 bytes
+					{
+						seek = 18*(i-1)*count + (2*j + 1)*9;
+					}
 
-				u16_data_len += 3;
+					if(custom_c)  // 1 column 1st row:address "@2000000" other rows are data  (4 bytes 2 pixels 14bit of 1 pixel) 1 line 360 bytes
+					{
+						seek = 9*((i-1)*(line_blank + count) + j) + addre_line_len + (linef_b * line_blank)*9;
+					}
+					
+					memset(strR, 0, 9);
+					memset(strG, 0, 9);
+					memset(strB, 0, 9);
 
-				pData[u16_data_len + 2] = dataBL;
-				pData[u16_data_len + 1] = dataGL;
-				pData[u16_data_len + 0] = dataRL;
+					memcpy(strR, &pdataR[seek], 8);
+					memcpy(strG, &pdataG[seek], 8);
+					memcpy(strB, &pdataB[seek], 8);
+					
+					dataR = matoi(strR,8);
+					dataG = matoi(strG,8);
+					dataB = matoi(strB,8);
+					
+					dataBH = (uint8_t)(0x000000ff&(dataB>>16));
+					dataBL = (uint8_t)(dataB&0x000000ff);
+					
+					dataGH = (uint8_t)(0x000000ff&(dataG>>16));
+					dataGL = (uint8_t)(dataG&0x000000ff);
 
-				u16_data_len += 3;
+					dataRH = (uint8_t)(0x000000ff&(dataR>>16));
+					dataRL = (uint8_t)(dataR&0x000000ff);
+#if debug
+					if(i==1 && j <10)
+					{
+						printf("\nj: %d\n", j);
+						printf("strR: %s\n",strR);
+						printf("dataR: %08x\n",dataR);
+						printf("dataRH: %02x\n",dataRH);
+						printf("dataRL: %02x\n",dataRL);
+						
+						printf("strG: %s\n",strG);
+						printf("dataG: %08x\n",dataG);
+						printf("dataGH: %02x\n",dataGH);
+						printf("dataGL: %02x\n",dataGL);
+						
+						printf("strB: %s\n",strB);
+						printf("dataB: %08x\n",dataB);
+						printf("dataBH: %02x\n",dataBH);
+						printf("dataBL: %02x\n",dataBL);
+						printf("--------------------------\n");
+					}
+#endif					
+					if(arm_in)
+					{
+						pData0[u16_data_len + 2] = dataRH;
+						pData0[u16_data_len + 1] = dataRH;
+						pData0[u16_data_len + 0] = dataRH;
+						
+						pData1[u16_data_len + 2] = dataGH;
+						pData1[u16_data_len + 1] = dataGH;
+						pData1[u16_data_len + 0] = dataGH;
+						
+						pData2[u16_data_len + 2] = dataBH;
+						pData2[u16_data_len + 1] = dataBH;
+						pData2[u16_data_len + 0] = dataBH;
+
+						u16_data_len += 3;
+						
+						pData0[u16_data_len + 2] = dataRL;
+						pData0[u16_data_len + 1] = dataRL;
+						pData0[u16_data_len + 0] = dataRL;
+						
+						pData1[u16_data_len + 2] = dataGL;
+						pData1[u16_data_len + 1] = dataGL;
+						pData1[u16_data_len + 0] = dataGL;
+						
+						pData2[u16_data_len + 2] = dataBL;
+						pData2[u16_data_len + 1] = dataBL;
+						pData2[u16_data_len + 0] = dataBL;
+
+						u16_data_len += 3;
+					}
+					else
+					{
+						pData0[u16_data_len + 2] = dataBH;
+						pData0[u16_data_len + 1] = dataGH;
+						pData0[u16_data_len + 0] = dataRH;
+
+						u16_data_len += 3;
+
+						pData0[u16_data_len + 2] = dataBL;
+						pData0[u16_data_len + 1] = dataGL;
+						pData0[u16_data_len + 0] = dataRL;
+
+						u16_data_len += 3;
+					}
+				}
 			}
-#endif
 		}
-		//printf("h:%d-w:%d : %d\n",i, j, u16_data_len);
-    }
-	
+	}
+	else//cif mode 1 rgb888 2 yuv422_888 
+	{
+		for (i = height; i > 0; i--)
+		{
+			for (j = 0; j < count; j++)
+			{
+				if(color_format == 1)  //RGB888 1 column 1st row:address "@2000000" other rows are data 
+				{
+					seek = 9*((i-1)*(line_blank*2 + count*2) + j*2) + addre_line_len + (linef_b * line_blank*2)*9;
+					/*
+					*  per pixel  bit31----------bit23-----------bit15----------bit7--------bit0
+					*                   R7---R0         G7---R0        B7---B0      00000000
+					*/
+					memset(strR, 0, 9);
+					memset(strG, 0, 9);
+					//memset(strB, 0, 9);
+					
+					memcpy(strR, &pdataR[seek], 8);
+					memcpy(strG, &pdataR[seek+9], 8);
+					//memcpy(strB, &pdataB[seek], 8);
+					
+					dataR = matoi(strR, 8);
+					dataG = matoi(strG, 8);
+					//dataB = matoi(strB,8);
+					
+					dataBH = (uint8_t)(0x000000ff&(dataR>>16));
+					dataBL = (uint8_t)(0x000000ff&(dataG>>16));
+					
+					dataGH = (uint8_t)(0x000000ff&(dataR>>8));
+					dataGL = (uint8_t)(0x000000ff&(dataG>>8));
+
+					dataRH = (uint8_t)(0x000000ff&(dataR));
+					dataRL = (uint8_t)(0x000000ff&(dataG));
+					
+					if(i==1 && j <10)
+					{
+						printf("j: %d\n", j);
+						printf("strR: %s\n", strR);
+						printf("dataR: %08x\n", dataR);
+						printf("dataRH: %02x\n", dataRH);
+						printf("dataGH: %02x\n", dataGH);
+						printf("dataBH: %02x\n", dataBH);
+						
+						printf("strG: %s\n", strG);
+						printf("dataG: %08x\n", dataG);
+						printf("dataRL: %02x\n", dataRL);
+						printf("dataGL: %02x\n", dataGL);
+						printf("dataBL: %02x\n", dataBL);
+						
+						printf("--------------------------\n");
+					}
+					
+					pData0[u16_data_len + 2] = dataBH;
+					pData0[u16_data_len + 1] = dataGH;
+					pData0[u16_data_len + 0] = dataRH;
+
+					u16_data_len += 3;
+					
+					pData0[u16_data_len + 2] = dataBL;
+					pData0[u16_data_len + 1] = dataGL;
+					pData0[u16_data_len + 0] = dataRL;
+
+					u16_data_len += 3;
+				}
+				
+				if(color_format == 2)  //yuv422_888 1 column 1st row:address "@2000000" other rows are data
+				{
+					seek = 9*((i-1)*(line_blank + count) + j) + addre_line_len + (linef_b * line_blank*2)*9;
+					/*
+					*  per pixel  bit31----------bit23-----------bit15----------bit7--------bit0
+					*                   Yn7---Yn0       V7---V0   Y(n+1)7---Y(n+1)0  U7---U0
+					*/
+					memset(strR, 0, 9);
+					//memset(strG, 0, 9);
+					//memset(strB, 0, 9);
+					
+					memcpy(strR, &pdataR[seek], 8);
+					//memcpy(strG, &pdataG[seek], 8);
+					//memcpy(strB, &pdataB[seek], 8);
+					
+					dataR = matoi(strR,8);
+					//dataG = matoi(strG,8);
+					//dataB = matoi(strB,8);
+					dataU= (uint8_t)(0x000000ff&(dataR>>24));
+					dataY1 = (uint8_t)(0x000000ff&(dataR>>16));
+					dataV = (uint8_t)(0x000000ff&(dataR>>8));
+					dataY0  = (uint8_t)(0x000000ff&(dataR));
+					
+					//R = Y + 1.4075 *（V-128）
+					//G = Y – 0.3455 *（U –128） – 0.7169 *（V –128）
+					//B = Y + 1.779 *（U – 128）
+					
+					dataBH = CLIP(dataY0 + 1.779*(dataU-128));
+					dataBL = CLIP(dataY1 + 1.779*(dataU-128));
+					
+					dataGH = CLIP(dataY0 - 0.3455*(dataU-128) - 0.7169*(dataV -128));
+					dataGL = CLIP(dataY1 - 0.3455*(dataU-128) - 0.7169*(dataV -128));
+
+					dataRH = CLIP(dataY0 + 1.4075*(dataV -128));
+					dataRL = CLIP(dataY1 + 1.4075*(dataV -128));
+					
+					pData0[u16_data_len + 2] = dataBH;
+					pData0[u16_data_len + 1] = dataGH;
+					pData0[u16_data_len + 0] = dataRH;
+
+					u16_data_len += 3;
+					
+					pData0[u16_data_len + 2] = dataBL;
+					pData0[u16_data_len + 1] = dataGL;
+					pData0[u16_data_len + 0] = dataRL;
+
+					u16_data_len += 3;
+				}
+			}
+			//printf("h:%d-w:%d : %d\n",i, j, u16_data_len);
+		}
+	}
 #if RAW2B
-    //createBMP((uint8_t*)buffer.data(), width, height, depth, file_name);
-	createBMP((uint8_t*)pData, width, height, depth, file_name);
+    //createBMP((uint8_t*)buffer.data(), width, height, depth, file_name0);
+	createBMP((uint8_t*)pData0, width, height, depth, file_name0);
 	if(arm_in)
 	{
 		createBMP((uint8_t*)pData1, width, height, depth, file_name1);
@@ -854,22 +1142,30 @@ int main(int argc, char *argv[])
 #endif
 
     free(pdataR);
-	free(pdataG);
-	free(pdataB);
-	free(pData);
+	if(pdataG != NULL)
+	{
+	    free(pdataG);
+	}
+	
+	if(pdataB != NULL)
+	{
+	    free(pdataB);
+	}
+	
+	free(pData0);
 	
 	if(arm_in)
 	{
 		free(pData1);
 		free(pData2);
-		printf(RED "Creat file %s done!\n" NONE,file_name);
+		printf(RED "Creat file %s done!\n" NONE,file_name0);
 		printf(RED "Creat file %s done!\n" NONE,file_name1);
 		printf(RED "Creat file %s done!\n" NONE,file_name2);
 		
 	}
 	else
 	{
-		printf(RED "Creat file %s done!\n" NONE,file_name);
+		printf(RED "Creat file %s done!\n" NONE,file_name0);
 	}
 
     return 0;

@@ -1,4 +1,4 @@
-* To build the project in ubuntu 16.04
+* To build the project
  $ make
 
 * in bin floder put hex files and hex2bin file in the bin floder
